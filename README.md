@@ -1,3 +1,4 @@
+
 # DeepCache: Accelerating Diffusion Models for Free
 <div align="center">
   <img src="https://github.com/horseee/Diffusion_DeepCache/blob/master/static/images/example_compress.gif" width="100%" ></img>
@@ -262,3 +263,6 @@ We warmly welcome contributions from everyone. Please feel free to reach out to 
 
 
 
+=======
+# Gen_ai_project
+>>>>>>> e4f5974b1523001be5f9e4abb098a102c61542e1
