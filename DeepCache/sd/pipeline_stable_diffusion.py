@@ -13,6 +13,20 @@
 # limitations under the License.
 import time 
 import inspect
+from cluster import store_feature, run_clustering
+import os as _os
+try:
+    from solvers import apply_solver_by_cluster
+    _HYCA_AVAILABLE = True
+except ImportError:
+    _HYCA_AVAILABLE = False
+import os as _os
+# HyCa solver imports (only used when use_hyca=True)
+try:
+    from solvers import apply_solver_by_cluster, load_cluster_labels, load_solver_assignments
+    _HYCA_AVAILABLE = True
+except ImportError:
+    _HYCA_AVAILABLE = False
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
@@ -38,6 +52,7 @@ from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionS
 
 from .unet_2d_condition import UNet2DConditionModel
 from .pipeline_utils import DiffusionPipeline
+ 
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -588,6 +603,9 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         pow: float = None,
         center: int = None,
         output_all_sequence: bool = False,
+        use_hyca: bool = False,
+        hyca_cluster_labels=None,
+        hyca_solver_assignments=None,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -721,6 +739,7 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
 
         prv_features = None
+        _hyca_history = []
         latents_list = [latents]
 
         if cache_interval == 1:
@@ -747,7 +766,34 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 if i in interval_seq:
-                    prv_features = None            
+                    # Compute step: run UNet fully, reset cache
+                    prv_features = None
+                elif use_hyca and _HYCA_AVAILABLE and hyca_cluster_labels is not None and len(_hyca_history) >= 3:
+                    # HyCa skip step: predict prv_features via solver instead of copy
+                    _predicted = apply_solver_by_cluster(
+                        _hyca_history[-3:],
+                        hyca_cluster_labels,
+                        hyca_solver_assignments,
+                    )
+                    dev = latents.device
+                    dty = latents.dtype
+                    # Sanitize and move to GPU — fall back to copy if NaN
+                    if isinstance(_predicted, (list, tuple)):
+                        _clean = []
+                        for _p, _orig in zip(_predicted, prv_features if isinstance(prv_features, (list,tuple)) else [prv_features]):
+                            _p = _p.to(device=dev, dtype=dty) if hasattr(_p, 'to') else _p
+                            if torch.isnan(_p).any() or torch.isinf(_p).any():
+                                _clean.append(_orig)  # fall back to copy
+                            else:
+                                _clean.append(_p)
+                        prv_features = _clean
+                    elif hasattr(_predicted, 'to'):
+                        _predicted = _predicted.to(device=dev, dtype=dty)
+                        if torch.isnan(_predicted).any() or torch.isinf(_predicted).any():
+                            pass  # keep prv_features as-is (copy)
+                        else:
+                            prv_features = _predicted
+                # else: plain DeepCache — prv_features reused as-is (original behaviour)
 
                 # predict the noise residual
                 noise_pred, prv_features = self.unet(
@@ -761,6 +807,13 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
                     cache_block_id=cache_block_id,
                     return_dict=False,
                 )
+                store_feature(noise_pred)
+                # HyCa: only record real features at compute steps
+                if use_hyca and _HYCA_AVAILABLE and i in interval_seq and prv_features is not None:
+                    _entry = [p.detach().float().cpu() if hasattr(p,'detach') else p for p in prv_features] if isinstance(prv_features, list) else prv_features.detach().float().cpu()
+                    _hyca_history.append(_entry)
+                    if len(_hyca_history) > 6:
+                        _hyca_history.pop(0)
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -805,7 +858,9 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
             image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
         # Offload all models
-        self.maybe_free_model_hooks()
+        self.maybe_free_model_hooks() 
+        if not _os.environ.get('DISABLE_CLUSTERING'):
+            run_clustering()
         if not return_dict:
             return (image, has_nsfw_concept,)
 

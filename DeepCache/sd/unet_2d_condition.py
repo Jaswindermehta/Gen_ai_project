@@ -34,7 +34,7 @@ from diffusers.models.embeddings import (
     ImageHintTimeEmbedding,
     ImageProjection,
     ImageTimeEmbedding,
-    PositionNet,
+    GLIGENTextBoundingboxProjection as PositionNet, #made changes here on 10th april for solvers
     TextImageProjection,
     TextImageTimeEmbedding,
     TextTimeEmbedding,
