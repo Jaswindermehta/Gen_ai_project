@@ -1,0 +1,16 @@
+# Ignore Virtual Environment
+venv/
+__pycache__/
+
+# Ignore Generated Datasets
+coco_baseline_random/
+coco_deepcache_random/
+coco_baseline_5000/
+coco_deepcache_5000/
+
+# Ignore any stray images in the root folder
+*.png
+*.jpg
+
+__pycache__
+output.pngvenv/
